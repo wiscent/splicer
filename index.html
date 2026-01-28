@@ -601,6 +601,15 @@
             if (state.originalImg.src) fitToViewport();
         });
     </script>
+
+	<script>
+	  if ('serviceWorker' in navigator) {
+		navigator.serviceWorker.register('./sw.js')
+		  .then(() => console.log("서비스 워커 등록 완료!"))
+		  .catch((err) => console.log("등록 실패:", err));
+	  }
+	</script>
+
 </body>
 
 </html>
