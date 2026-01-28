@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Image Slit Splicer Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --bg-deep: #0A0A0A;
+            --accent: #ff9800;
+            --accent-glow: rgba(255, 152, 0, 0.4);
+            --active-glow: rgba(255, 152, 0, 0.7);
+        }
+
+        body { 
+            background-color: var(--bg-deep); 
+            color: #e0e0e0; 
+            touch-action: none; 
+            overflow: hidden; 
+            font-family: 'Inter', -apple-system, sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        
+        #editor-viewport {
+            position: relative;
+            width: 100vw;
+            height: calc(100vh - 140px);
+            overflow: hidden;
+            background-color: #000;
+        }
+
+        @media (min-width: 640px) {
+            #editor-viewport { height: calc(100vh - 120px); }
+        }
+
+        #editor-viewport.view-pan-mode { cursor: grab; }
+        #editor-viewport.view-pan-mode:active { cursor: grabbing; }
+
+        #canvas-wrapper {
+            position: absolute;
+            will-change: transform;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transform-origin: center center;
+        }
+
+        #mainCanvas {
+            display: block;
+            box-shadow: 0 0 60px rgba(0,0,0,0.9);
+            background-image: 
+                linear-gradient(45deg, #111 25%, transparent 25%), 
+                linear-gradient(-45deg, #111 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #111 75%), 
+                linear-gradient(-45deg, transparent 75%, #111 75%);
+            background-size: 20px 20px;
+            image-rendering: -webkit-optimize-contrast;
+        }
+
+        .slit-line {
+            position: absolute;
+            left: -200vw;
+            right: -200vw;
+            height: 2px;
+            background-color: #444;
+            pointer-events: none;
+            z-index: 50;
+            opacity: 0.8;
+        }
+
+        .slit-line.active {
+            background-color: var(--accent);
+            box-shadow: 0 0 15px var(--active-glow);
+            height: 4px;
+            opacity: 1;
+            z-index: 100;
+        }
+
+        .slit-label {
+            position: absolute;
+            right: calc(50% + 10px);
+            transform: translateX(200px);
+            top: -12px;
+            background: #333;
+            color: #ccc;
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 2px;
+            font-weight: bold;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        @media (max-width: 640px) {
+            .slit-label { transform: translateX(120px); }
+        }
+
+        .active .slit-label {
+            background: var(--accent);
+            color: black;
+        }
+
+        .slit-delete-btn {
+            position: absolute;
+            left: calc(50% - 10px);
+            transform: translateX(-200px);
+            top: -14px;
+            width: 28px;
+            height: 28px;
+            background: #cc3333;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            cursor: pointer;
+            z-index: 110;
+            border: 2px solid var(--bg-deep);
+            pointer-events: auto;
+        }
+
+        @media (max-width: 640px) {
+            .slit-delete-btn { transform: translateX(-120px); }
+        }
+
+        /* 줌 컨트롤 플로팅 레이아웃 */
+        #zoom-controls {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 200;
+        }
+
+        .zoom-btn {
+            width: 44px;
+            height: 44px;
+            background: rgba(39, 39, 42, 0.8);
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(63, 63, 70, 0.5);
+            color: white;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .zoom-btn:active {
+            background: var(--accent);
+            color: black;
+            transform: scale(0.95);
+        }
+
+        #toast-container {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 2000;
+            pointer-events: none;
+            width: 90%;
+            max-width: 400px;
+        }
+
+        .toast {
+            background: rgba(30, 30, 30, 0.95);
+            color: var(--accent);
+            padding: 10px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: bold;
+            text-align: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            margin-bottom: 8px;
+            border: 1px solid var(--accent);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateY(-20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .preview-mode .slit-line,
+        .preview-mode .slit-delete-btn,
+        .preview-mode #zoom-controls {
+            display: none !important;
+        }
+
+        button:disabled { opacity: 0.3; cursor: not-allowed !important; }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen">
+
+    <div id="toast-container"></div>
+
+    <header class="w-full bg-zinc-900 border-b border-zinc-800 z-50 p-2 sm:px-6 sm:h-16 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <div class="flex items-center justify-between w-full sm:w-auto gap-4">
+            <h1 class="text-base sm:text-lg font-black tracking-tighter text-white uppercase italic">SPLICER<span class="text-orange-500">PRO</span></h1>
+            <div class="h-4 w-[1px] bg-zinc-700 hidden sm:block"></div>
+            <p class="text-zinc-500 text-[9px] uppercase tracking-widest font-mono hidden md:block italic text-zinc-600">Advanced Engine</p>
+            <div class="sm:hidden flex gap-1">
+                <button id="mobileResetBtn" class="text-zinc-500 text-[10px] border border-zinc-700 px-2 py-1 rounded">RESET</button>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-1 sm:gap-2 w-full sm:w-auto overflow-x-auto no-scrollbar pb-1 sm:pb-0">
+            <label class="shrink-0 bg-zinc-800 hover:bg-zinc-700 text-white px-3 py-2 sm:py-1.5 rounded cursor-pointer transition text-[11px] sm:text-xs font-medium">
+                이미지 열기
+                <input type="file" id="imageInput" accept="image/*" class="hidden">
+            </label>
+            <button id="addSlitBtn" class="shrink-0 bg-zinc-800 hover:bg-zinc-700 text-white px-3 py-2 sm:py-1.5 rounded transition text-[11px] sm:text-xs font-medium">
+                + 슬릿 추가
+            </button>
+            <div class="shrink-0 w-[1px] h-4 bg-zinc-700 mx-1"></div>
+            <button id="togglePanBtn" class="shrink-0 bg-zinc-800 hover:bg-zinc-700 text-white px-3 py-2 sm:py-1.5 rounded transition text-[11px] sm:text-xs font-medium">
+                화면 이동
+            </button>
+            <button id="previewBtn" class="shrink-0 bg-zinc-700 hover:bg-zinc-600 text-white px-3 py-2 sm:py-1.5 rounded transition text-[11px] sm:text-xs font-medium select-none">
+                미리보기
+            </button>
+            <button id="downloadBtn" class="shrink-0 bg-orange-600 hover:bg-orange-700 text-white px-3 py-2 sm:py-1.5 rounded transition disabled:opacity-30 text-[11px] sm:text-xs font-bold" disabled>
+                저장
+            </button>
+            <button id="resetBtn" class="shrink-0 bg-zinc-800 hover:bg-zinc-700 text-white px-3 py-2 sm:py-1.5 rounded transition text-[11px] sm:text-xs font-medium hidden sm:block">
+                초기화
+            </button>
+        </div>
+    </header>
+
+    <main id="editor-viewport" class="flex-grow">
+        <div id="canvas-wrapper" class="hidden">
+            <canvas id="mainCanvas"></canvas>
+            <div id="slitsContainer" class="absolute inset-0 pointer-events-none"></div>
+        </div>
+
+        <!-- 줌 컨트롤 (태블릿/PC에서 상시 노출, 모바일 세로 모드에선 숨김 제안) -->
+        <div id="zoom-controls" class="hidden md:flex">
+            <button class="zoom-btn" onclick="zoomImage(1.2)">+</button>
+            <button class="zoom-btn" onclick="zoomImage(0.8)">-</button>
+            <button class="zoom-btn" onclick="fitToViewport()" title="너비 맞춤">⛶</button>
+        </div>
+
+        <div id="placeholder" class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none p-4">
+            <div class="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-zinc-900 flex items-center justify-center mb-4 border border-zinc-800">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 sm:h-8 sm:w-8 text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+            </div>
+            <p class="text-zinc-500 text-xs sm:text-sm font-medium uppercase tracking-widest text-center italic">Ready to Splicing</p>
+        </div>
+    </main>
+
+    <footer class="w-full h-14 px-4 sm:px-6 bg-zinc-900 border-t border-zinc-800 flex items-center justify-between text-[9px] sm:text-[10px] text-zinc-500 uppercase tracking-widest z-50 font-mono">
+        <div class="flex gap-4 sm:gap-6">
+            <div id="statSource" class="hidden xs:block">SRC: ---</div>
+            <div id="statOutput">OUT: ---</div>
+            <div id="statZoom" class="text-zinc-400">ZOOM: 100%</div>
+        </div>
+        <div class="flex gap-4 sm:gap-6 italic">
+            <div id="statSlits">SLITS: 0</div>
+            <div id="statActive" class="hidden xs:block">ACTIVE: NONE</div>
+            <div id="statMode" class="text-orange-500 font-bold">EDIT</div>
+        </div>
+        <div class="hidden lg:block text-right">
+            DRAG: MOVE | PINCH: ZOOM | AUTO-FIT WIDTH
+        </div>
+    </footer>
+
+    <script>
+        const MIN_GAP_DRAG = 2;
+        const SLIT_HIT_THRESHOLD = 30; 
+
+        const state = {
+            originalImg: new Image(),
+            slits: [], 
+            slitCounter: 1, 
+            activeSlitId: null,
+            canvasPos: { x: 0, y: 0 },
+            isPanning: false, 
+            isPanMode: false, 
+            activeAction: null, 
+            dragStart: { x: 0, y: 0 },
+            dragInitialValues: null,
+            displayScale: 1,
+            pinchStartDist: 0,
+            pinchStartScale: 1
+        };
+
+        const dom = {
+            imageInput: document.getElementById('imageInput'),
+            mainCanvas: document.getElementById('mainCanvas'),
+            ctx: document.getElementById('mainCanvas').getContext('2d'),
+            viewport: document.getElementById('editor-viewport'),
+            canvasWrapper: document.getElementById('canvas-wrapper'),
+            slitsContainer: document.getElementById('slitsContainer'),
+            placeholder: document.getElementById('placeholder'),
+            addSlitBtn: document.getElementById('addSlitBtn'),
+            togglePanBtn: document.getElementById('togglePanBtn'),
+            previewBtn: document.getElementById('previewBtn'),
+            downloadBtn: document.getElementById('downloadBtn'),
+            resetBtn: document.getElementById('resetBtn'),
+            mobileResetBtn: document.getElementById('mobileResetBtn'),
+            statSource: document.getElementById('statSource'),
+            statOutput: document.getElementById('statOutput'),
+            statZoom: document.getElementById('statZoom'),
+            statSlits: document.getElementById('statSlits'),
+            statActive: document.getElementById('statActive'),
+            statMode: document.getElementById('statMode'),
+            toastContainer: document.getElementById('toast-container')
+        };
+
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerText = message;
+            dom.toastContainer.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        const setPreview = (val) => {
+            if (val) dom.viewport.classList.add('preview-mode');
+            else dom.viewport.classList.remove('preview-mode');
+        };
+
+        /**
+         * 확대/축소 핵심 로직
+         */
+        function zoomImage(factor) {
+            if (!state.originalImg.src) return;
+            const newScale = Math.min(10, Math.max(0.05, state.displayScale * factor));
+            state.displayScale = newScale;
+            updateSplicing();
+            renderTransform();
+        }
+
+        function fitToViewport() {
+            if (!state.originalImg.src) return;
+            const availableW = dom.viewport.clientWidth * 0.95; // 95% 너비로 자동 맞춤
+            state.displayScale = availableW / state.originalImg.width;
+            
+            // 중앙 정렬 초기화
+            state.canvasPos = { x: 0, y: 0 };
+            updateSplicing();
+            renderTransform();
+        }
+
+        function getSlitCanvasY(slitId) {
+            const sortedSlits = [...state.slits].sort((a, b) => a.y - b.y);
+            let canvasY = 0;
+            let lastSrcY = 0;
+            for (const s of sortedSlits) {
+                const segH = Math.max(0, s.y - s.topFold - lastSrcY);
+                canvasY += segH;
+                if (s.id === slitId) return canvasY;
+                lastSrcY = Math.max(s.y - s.topFold, s.y + s.bottomFold);
+            }
+            return canvasY;
+        }
+
+        function mapCanvasToSource(canvasY) {
+            const sorted = [...state.slits].sort((a, b) => a.y - b.y);
+            let currentCanvasY = 0;
+            let lastSourceY = 0;
+            for (const s of sorted) {
+                const segEnd = Math.max(lastSourceY, s.y - s.topFold);
+                const segH = segEnd - lastSourceY;
+                if (canvasY <= currentCanvasY + segH) return lastSourceY + (canvasY - currentCanvasY);
+                currentCanvasY += segH;
+                lastSourceY = Math.max(segEnd, s.y + s.bottomFold);
+            }
+            return lastSourceY + (canvasY - currentCanvasY);
+        }
+
+        function updateSplicing() {
+            if (!state.originalImg.src) return;
+            const img = state.originalImg;
+            const sortedSlits = [...state.slits].sort((a, b) => a.y - b.y);
+            const segments = [];
+            let lastSourceY = 0;
+            for (const slit of sortedSlits) {
+                const segmentEnd = Math.max(lastSourceY, slit.y - slit.topFold);
+                if (segmentEnd > lastSourceY) segments.push({ start: lastSourceY, end: segmentEnd });
+                lastSourceY = Math.max(segmentEnd, slit.y + slit.bottomFold);
+            }
+            if (lastSourceY < img.height) segments.push({ start: lastSourceY, end: img.height });
+
+            const totalOutputHeight = segments.reduce((sum, seg) => sum + (seg.end - seg.start), 0);
+            const finalHeight = Math.max(5, Math.round(totalOutputHeight));
+            dom.mainCanvas.width = img.width;
+            dom.mainCanvas.height = finalHeight;
+            let currentDrawY = 0;
+            segments.forEach(seg => {
+                const h = Math.round(seg.end - seg.start);
+                if (h > 0) {
+                    dom.ctx.drawImage(img, 0, Math.round(seg.start), img.width, h, 0, currentDrawY, img.width, h);
+                    currentDrawY += h;
+                }
+            });
+            updateSlitUI(sortedSlits);
+            updateStats();
+        }
+
+        function updateSlitUI(sortedSlits) {
+            dom.slitsContainer.innerHTML = '';
+            let prevSourceEnd = 0;
+            let currentCanvasY = 0;
+            sortedSlits.forEach((slit) => {
+                const segH = Math.max(0, slit.y - slit.topFold - prevSourceEnd);
+                currentCanvasY += segH;
+                prevSourceEnd = Math.max(slit.y - slit.topFold, slit.y + slit.bottomFold);
+                const el = document.createElement('div');
+                el.className = `slit-line ${state.activeSlitId === slit.id ? 'active' : ''}`;
+                el.style.top = `${currentCanvasY * state.displayScale}px`;
+                el.innerHTML = `<div class="slit-label">#${slit.number}</div>${state.slits.length > 1 ? `<button class="slit-delete-btn" data-id="${slit.id}">×</button>` : ''}`;
+                const delBtn = el.querySelector('.slit-delete-btn');
+                if (delBtn) {
+                    const handleDel = (e) => { e.stopPropagation(); removeSlit(slit.id); };
+                    delBtn.onclick = handleDel;
+                    delBtn.ontouchstart = handleDel;
+                }
+                dom.slitsContainer.appendChild(el);
+            });
+            dom.mainCanvas.style.width = `${dom.mainCanvas.width * state.displayScale}px`;
+            dom.mainCanvas.style.height = `${dom.mainCanvas.height * state.displayScale}px`;
+        }
+
+        function startAction(e, type, slitId = null) {
+            if (!state.originalImg.src) return;
+            const point = e.touches ? e.touches[0] : e;
+            state.activeAction = type;
+            state.dragStart = { x: point.clientX, y: point.clientY };
+            state.activeSlitId = slitId;
+            const slit = state.slits.find(s => s.id === slitId);
+            state.dragInitialValues = {
+                canvasTop: state.canvasPos.y,
+                canvasLeft: state.canvasPos.x,
+                slits: JSON.parse(JSON.stringify(state.slits)),
+                initialSlitCanvasY: slit ? getSlitCanvasY(slit.id) : 0
+            };
+            document.body.style.cursor = type === 'pan' ? 'grabbing' : 'ns-resize';
+            updateSplicing();
+        }
+
+        function onMove(e) {
+            if (e.type === 'touchmove') e.preventDefault();
+            if (e.touches && e.touches.length === 2) {
+                const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                if (state.pinchStartDist === 0) {
+                    state.pinchStartDist = dist;
+                    state.pinchStartScale = state.displayScale;
+                } else {
+                    const delta = dist / state.pinchStartDist;
+                    state.displayScale = Math.min(10, Math.max(0.05, state.pinchStartScale * delta));
+                    updateSplicing();
+                }
+                return;
+            }
+            if (!state.activeAction) return;
+            const point = e.touches ? e.touches[0] : e;
+            const dx = point.clientX - state.dragStart.x;
+            const dy = point.clientY - state.dragStart.y;
+            const pixelDeltaY = dy / state.displayScale;
+            if (state.activeAction === 'pan') {
+                state.canvasPos.x = state.dragInitialValues.canvasLeft + dx;
+                state.canvasPos.y = state.dragInitialValues.canvasTop + dy;
+            } else {
+                const slit = state.slits.find(s => s.id === state.activeSlitId);
+                const initSlit = state.dragInitialValues.slits.find(s => s.id === state.activeSlitId);
+                if (!slit) return;
+                if (state.activeAction === 'moveSlit') {
+                    let newY = initSlit.y + pixelDeltaY;
+                    const others = state.slits.filter(s => s.id !== slit.id);
+                    if (!others.some(o => Math.abs(o.y - newY) < MIN_GAP_DRAG)) slit.y = Math.max(0, Math.min(state.originalImg.height, newY));
+                } else if (state.activeAction === 'foldTop') {
+                    slit.topFold = Math.max(0, Math.min(slit.y, initSlit.topFold + pixelDeltaY));
+                    const newSlitCanvasY = getSlitCanvasY(slit.id);
+                    const canvasOffset = (state.dragInitialValues.initialSlitCanvasY - newSlitCanvasY) * state.displayScale;
+                    state.canvasPos.y = state.dragInitialValues.canvasTop + canvasOffset;
+                } else if (state.activeAction === 'foldBottom') {
+                    slit.bottomFold = Math.max(0, Math.min(state.originalImg.height - slit.y, initSlit.bottomFold - pixelDeltaY));
+                }
+            }
+            renderTransform();
+            updateSplicing();
+        }
+
+        function onEnd() { state.activeAction = null; state.pinchStartDist = 0; document.body.style.cursor = state.isPanMode ? 'grab' : 'default'; setPreview(false); }
+
+        function handleViewportStart(e) {
+            if (e.touches && e.touches.length > 1) return;
+            if (state.isPanMode || state.isPanning || e.button === 1) { startAction(e, 'pan'); return; }
+            const point = e.touches ? e.touches[0] : e;
+            const rect = dom.mainCanvas.getBoundingClientRect();
+            const clickYOnCanvas = (point.clientY - rect.top) / state.displayScale;
+            let targetSlitId = null; let minDistance = Infinity; let isMoveAction = false;
+            state.slits.forEach(s => {
+                const sCanvasY = getSlitCanvasY(s.id);
+                const dist = Math.abs(clickYOnCanvas - sCanvasY);
+                if (dist < minDistance) { minDistance = dist; targetSlitId = s.id; }
+            });
+            if (minDistance < SLIT_HIT_THRESHOLD) isMoveAction = true;
+            if (targetSlitId) {
+                state.activeSlitId = targetSlitId;
+                if (isMoveAction) startAction(e, 'moveSlit', targetSlitId);
+                else { const sY = getSlitCanvasY(targetSlitId); startAction(e, clickYOnCanvas < sY ? 'foldTop' : 'foldBottom', targetSlitId); }
+            }
+        }
+
+        function addSlit() {
+            if (!state.originalImg.src || state.isPanMode) return;
+            const sorted = [...state.slits].sort((a, b) => a.y - b.y);
+            let activeIdx = sorted.findIndex(s => s.id === state.activeSlitId);
+            if (activeIdx === -1) activeIdx = sorted.length - 1;
+            const currentSlit = sorted[activeIdx];
+            const nextSlit = sorted[activeIdx + 1];
+            const vpH = dom.viewport.clientHeight;
+            const currentSlitCanvasY = getSlitCanvasY(currentSlit.id);
+            let limitCanvasY;
+            if (nextSlit) {
+                const nextSlitCanvasY = getSlitCanvasY(nextSlit.id);
+                const nextSlitScreenY = state.canvasPos.y + (nextSlitCanvasY * state.displayScale);
+                if (nextSlitScreenY >= 0 && nextSlitScreenY <= vpH) limitCanvasY = nextSlitCanvasY;
+                else limitCanvasY = (vpH - state.canvasPos.y) / state.displayScale;
+            } else {
+                const imageBottomScreenY = state.canvasPos.y + (dom.mainCanvas.height * state.displayScale);
+                if (imageBottomScreenY <= vpH) limitCanvasY = dom.mainCanvas.height;
+                else limitCanvasY = (vpH - state.canvasPos.y) / state.displayScale;
+            }
+            const targetCanvasY = currentSlitCanvasY + (limitCanvasY - currentSlitCanvasY) / 3;
+            const targetSourceY = mapCanvasToSource(targetCanvasY);
+            if (targetSourceY <= currentSlit.y || targetSourceY >= state.originalImg.height) { showToast("공간이 부족합니다."); return; }
+            const newSlit = { id: Math.random().toString(36).substr(2, 9), number: state.slitCounter++, y: Math.round(targetSourceY), topFold: 0, bottomFold: 0 };
+            state.slits.push(newSlit); state.activeSlitId = newSlit.id; updateSplicing();
+        }
+
+        function removeSlit(id) { if (state.slits.length <= 1) return; state.slits = state.slits.filter(s => s.id !== id); if (state.activeSlitId === id) state.activeSlitId = null; updateSplicing(); }
+
+        function renderTransform() { dom.canvasWrapper.style.transform = `translate(${state.canvasPos.x}px, ${state.canvasPos.y}px)`; }
+
+        function updateStats() {
+            if (!state.originalImg.src) return;
+            dom.statSource.innerText = `SRC: ${state.originalImg.width}x${state.originalImg.height}`;
+            dom.statOutput.innerText = `OUT: ${dom.mainCanvas.width}x${dom.mainCanvas.height}`;
+            dom.statZoom.innerText = `ZOOM: ${Math.round(state.displayScale * 100)}%`;
+            dom.statSlits.innerText = `SLITS: ${state.slits.length}`;
+            const activeSlit = state.slits.find(s => s.id === state.activeSlitId);
+            dom.statActive.innerText = `ACTIVE: ${activeSlit ? '#' + activeSlit.number : 'NONE'}`;
+            dom.statMode.innerText = state.isPanMode ? 'MOVE' : 'EDIT';
+        }
+
+        dom.imageInput.onchange = (e) => {
+            const file = e.target.files[0]; if (!file) return;
+            const reader = new FileReader(); reader.onload = (event) => state.originalImg.src = event.target.result; reader.readAsDataURL(file);
+        };
+
+        state.originalImg.onload = () => {
+            dom.placeholder.classList.add('hidden'); dom.canvasWrapper.classList.remove('hidden'); dom.downloadBtn.disabled = false;
+            state.slits = []; state.slitCounter = 1; 
+            const initialSlit = { id: Math.random().toString(36).substr(2, 9), number: state.slitCounter++, y: Math.round(state.originalImg.height * 0.4), topFold: 0, bottomFold: 0 };
+            state.slits.push(initialSlit); state.activeSlitId = initialSlit.id;
+            
+            fitToViewport(); // 초기 자동 비율 맞춤
+        };
+
+        dom.addSlitBtn.onclick = () => addSlit();
+        dom.togglePanBtn.onclick = () => {
+            state.isPanMode = !state.isPanMode;
+            if (state.isPanMode) { dom.viewport.classList.add('view-pan-mode'); dom.togglePanBtn.classList.replace('bg-zinc-800', 'bg-orange-600'); dom.addSlitBtn.disabled = true; }
+            else { dom.viewport.classList.remove('view-pan-mode'); dom.togglePanBtn.classList.replace('bg-orange-600', 'bg-zinc-800'); dom.addSlitBtn.disabled = false; }
+            updateStats();
+        };
+
+        dom.resetBtn.onclick = dom.mobileResetBtn.onclick = () => state.originalImg.onload();
+        dom.downloadBtn.onclick = () => { const link = document.createElement('a'); link.download = `spliced_${Date.now()}.png`; link.href = dom.mainCanvas.toDataURL('image/png'); link.click(); };
+
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('touchmove', onMove, { passive: false });
+        window.addEventListener('mouseup', onEnd);
+        window.addEventListener('touchend', onEnd);
+        dom.viewport.addEventListener('mousedown', handleViewportStart);
+        dom.viewport.addEventListener('touchstart', handleViewportStart);
+        dom.previewBtn.addEventListener('mousedown', (e) => { e.preventDefault(); setPreview(true); });
+        dom.previewBtn.addEventListener('touchstart', (e) => { e.preventDefault(); setPreview(true); });
+        window.addEventListener('keydown', (e) => { if (e.code === 'Space') { state.isPanning = true; dom.viewport.classList.add('view-pan-mode'); } });
+        window.addEventListener('keyup', (e) => { if (e.code === 'Space') { state.isPanning = false; if (!state.isPanMode) dom.viewport.classList.remove('view-pan-mode'); } });
+        
+        // 화면 크기 변화 감지 (자동 비율 적용)
+        window.addEventListener('resize', () => {
+            if (state.originalImg.src) fitToViewport();
+        });
+    </script>
+</body>
+</html>
